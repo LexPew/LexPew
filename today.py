@@ -272,7 +272,6 @@ def loc_counter_one_repo(owner, repo_name, data, cache_comment, history, additio
 
 
 def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, deletion_total=0, my_commits=0, cursor=None):
-    """Fetch commit history (100 at a time) and sum additions/deletions for your authored commits."""
     query_count("recursive_loc")
     query = """
     query ($repo_name: String!, $owner: String!, $cursor: String) {
@@ -280,24 +279,18 @@ def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, delet
             defaultBranchRef {
                 target {
                     ... on Commit {
-                        history(first: 100, after: $cursor) {
+                        history(first: 50, after: $cursor) {
                             totalCount
                             edges {
                                 node {
                                     ... on Commit {
-                                        committedDate
                                         deletions
                                         additions
-                                        author {
-                                            user { id }
-                                        }
+                                        author { user { id } }
                                     }
                                 }
                             }
-                            pageInfo {
-                                endCursor
-                                hasNextPage
-                            }
+                            pageInfo { endCursor hasNextPage }
                         }
                     }
                 }
@@ -306,20 +299,34 @@ def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, delet
     }"""
     variables = {"repo_name": repo_name, "owner": owner, "cursor": cursor}
 
-    # Can't use simple_request because we want to save cache before raising if failure
-    request = requests.post(API_URL, json={"query": query, "variables": variables}, headers=HEADERS, timeout=60)
+    # Retry on transient GitHub errors
+    max_retries = 6
+    backoff = 1.0
+    for attempt in range(max_retries):
+        request = requests.post(API_URL, json={"query": query, "variables": variables}, headers=HEADERS, timeout=60)
 
-    if request.status_code == 200:
-        repo = request.json()["data"]["repository"]
-        if repo and repo["defaultBranchRef"] is not None:
-            history = repo["defaultBranchRef"]["target"]["history"]
-            return loc_counter_one_repo(owner, repo_name, data, cache_comment, history, addition_total, deletion_total, my_commits)
-        return (0, 0, 0)  # empty repo / no default branch
+        if request.status_code == 200:
+            repo = request.json()["data"]["repository"]
+            if repo and repo["defaultBranchRef"] is not None:
+                history = repo["defaultBranchRef"]["target"]["history"]
+                return loc_counter_one_repo(owner, repo_name, data, cache_comment, history, addition_total, deletion_total, my_commits)
+            return (0, 0, 0)
 
+        if request.status_code in (502, 503, 504):
+            # transient infra error: wait and retry
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+
+        # other failures: preserve cache then raise
+        force_close_file(data, cache_comment)
+        if request.status_code == 403:
+            raise Exception("Too many requests in a short amount of time! You've hit GitHub's anti-abuse limit.")
+        raise Exception("recursive_loc() has failed with", request.status_code, request.text, QUERY_COUNT)
+
+    # Out of retries: preserve cache and fail (or you can choose to skip LOC instead)
     force_close_file(data, cache_comment)
-    if request.status_code == 403:
-        raise Exception("Too many requests in a short amount of time! You've hit GitHub's anti-abuse limit.")
-    raise Exception("recursive_loc() has failed with", request.status_code, request.text, QUERY_COUNT)
+    raise Exception("recursive_loc() exhausted retries (likely GitHub 502/503).", owner, repo_name, QUERY_COUNT)
 
 
 def loc_query(owner_affiliation, comment_size=0, force_cache=False, cursor=None, edges=None):
