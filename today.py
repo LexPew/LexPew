@@ -529,6 +529,7 @@ if __name__ == "__main__":
     formatter("age calculation", age_time)
 
     # LOC data (cached)
+try:
     total_loc, loc_time = perf_counter(
         loc_query,
         ["OWNER", "COLLABORATOR", "ORGANIZATION_MEMBER"],
@@ -536,6 +537,11 @@ if __name__ == "__main__":
         FORCE_CACHE,
     )
     formatter("LOC (cached)", loc_time) if total_loc[-1] else formatter("LOC (no cache)", loc_time)
+except Exception as e:
+    # Keep the workflow alive even if GitHub 502s during LOC
+    print("LOC failed (continuing without LOC):", str(e))
+    total_loc = [0, 0, 0, False]
+    loc_time = 0.0
 
     # Commits (from cache), stars, repos, contributed repos, followers
     commit_data, commit_time = perf_counter(commit_counter, CACHE_COMMENT_LINES)
