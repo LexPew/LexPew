@@ -12,6 +12,7 @@ What this script does:
 - Updates SVG files by replacing text in elements with IDs:
   commit_data, star_data, repo_data, contrib_data, follower_data, loc_data, loc_add, loc_del, age_data
   and their *_dots spacer IDs.
+"""
 
 import datetime
 import hashlib
@@ -55,7 +56,7 @@ QUERY_COUNT = {
 
 API_URL = "https://api.github.com/graphql"
 
-# Create cache directory (Actions runs in a clean workspace)
+# Create cache directory (Actions s in a clean workspace)
 Path("cache").mkdir(parents=True, exist_ok=True)
 
 # Will be set in main()
