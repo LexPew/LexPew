@@ -1,0 +1,42 @@
+name: Update GitHub Stats SVG
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests lxml python-dateutil
+
+      - name: Run generator
+        env:
+          USER_NAME: lexpew               
+          BIRTHDAY: "2004-09-04"        
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}  
+        run: |
+          python your_script_name.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dark_mode.svg light_mode.svg cache || true
+          git commit -m "chore: update stats svg" || exit 0
+          git push
