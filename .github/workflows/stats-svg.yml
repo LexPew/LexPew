@@ -31,7 +31,7 @@ jobs:
           BIRTHDAY: "2004-09-04"        
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}  
         run: |
-          python your_script_name.py
+          python today.py
 
       - name: Commit changes
         run: |
