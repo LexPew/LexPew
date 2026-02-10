@@ -40,13 +40,22 @@ def format_plural(unit):
     return 's' if unit != 1 else ''
 
 
-def simple_request(func_name, query, variables):
+def simple_request(func_name, query, variables, max_retries=3):
     """
     Returns a request, or raises an Exception if the response does not succeed.
+    Retries on transient errors (502, 503, 504) with exponential backoff.
     """
-    request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables':variables}, headers=HEADERS)
-    if request.status_code == 200:
-        return request
+    for attempt in range(max_retries):
+        request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables':variables}, headers=HEADERS)
+        if request.status_code == 200:
+            return request
+        # Retry on transient server errors
+        if request.status_code in [502, 503, 504] and attempt < max_retries - 1:
+            wait_time = (2 ** attempt) * 1  # exponential backoff: 1s, 2s, 4s
+            print(f'Received {request.status_code} error, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})')
+            time.sleep(wait_time)
+            continue
+        break
     raise Exception(func_name, ' has failed with a', request.status_code, request.text, QUERY_COUNT)
 
 
@@ -106,9 +115,10 @@ def graph_repos_stars(count_type, owner_affiliation, cursor=None, add_loc=0, del
             return stars_counter(request.json()['data']['user']['repositories']['edges'])
 
 
-def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, deletion_total=0, my_commits=0, cursor=None):
+def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, deletion_total=0, my_commits=0, cursor=None, max_retries=3):
     """
     Uses GitHub's GraphQL v4 API and cursor pagination to fetch 100 commits from a repository at a time
+    Retries on transient errors (502, 503, 504) with exponential backoff.
     """
     query_count('recursive_loc')
     query = '''
@@ -144,11 +154,26 @@ def recursive_loc(owner, repo_name, data, cache_comment, addition_total=0, delet
         }
     }'''
     variables = {'repo_name': repo_name, 'owner': owner, 'cursor': cursor}
-    request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables':variables}, headers=HEADERS) # I cannot use simple_request(), because I want to save the file before raising Exception
-    if request.status_code == 200:
-        if request.json()['data']['repository']['defaultBranchRef'] != None: # Only count commits if repo isn't empty
-            return loc_counter_one_repo(owner, repo_name, data, cache_comment, request.json()['data']['repository']['defaultBranchRef']['target']['history'], addition_total, deletion_total, my_commits)
-        else: return 0
+    
+    # Retry loop for transient errors
+    for attempt in range(max_retries):
+        request = requests.post('https://api.github.com/graphql', json={'query': query, 'variables':variables}, headers=HEADERS) # I cannot use simple_request(), because I want to save the file before raising Exception
+        if request.status_code == 200:
+            if request.json()['data']['repository']['defaultBranchRef'] != None: # Only count commits if repo isn't empty
+                return loc_counter_one_repo(owner, repo_name, data, cache_comment, request.json()['data']['repository']['defaultBranchRef']['target']['history'], addition_total, deletion_total, my_commits)
+            else: return 0
+        
+        # Retry on transient server errors
+        if request.status_code in [502, 503, 504] and attempt < max_retries - 1:
+            wait_time = (2 ** attempt) * 1  # exponential backoff: 1s, 2s, 4s
+            print(f'Received {request.status_code} error for {owner}/{repo_name}, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})')
+            time.sleep(wait_time)
+            continue
+        
+        # If we got here and it's a 403 or final retry attempt failed, handle error
+        break
+    
+    # Error handling after all retries exhausted
     force_close_file(data, cache_comment) # saves what is currently in the file before this program crashes
     if request.status_code == 403:
         raise Exception('Too many requests in a short amount of time!\nYou\'ve hit the non-documented anti-abuse limit!')
